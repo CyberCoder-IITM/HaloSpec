@@ -11,10 +11,17 @@ struct LemonadeEngine {
 impl LemonadeEngine {
     fn new(target: &str) -> Self {
         println!("[Lemonade API] Connecting to Local Server at localhost:8000...");
+        // BUILDER: Setting a 30-second timeout to handle high-bandwidth speculative batches
+        let custom_client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
         println!("   -> Target Model: {}", target);
+
         LemonadeEngine {
             target_model: target.to_string(),
-            client: Client::new(),
+            client: custom_client,
         }
     }
 
@@ -90,7 +97,8 @@ fn main() {
         // It sends the network request to your Lemonade App.
         engine.generate_speculative_batch(user_prompt, draft_tokens);
         
-        std::thread::sleep(Duration::from_secs(4));
+        // Give the local server a 6-second cool-down to stabilize UMA buffers
+        std::thread::sleep(Duration::from_secs(6));
     }
 
     println!("System loop complete. Hardware utilized perfectly.");
