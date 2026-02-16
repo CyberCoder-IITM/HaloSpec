@@ -37,7 +37,7 @@ impl LemonadeEngine {
                 {"role": "user", "content": prompt}
             ],
             "stream": false,
-            "max_tokens": 192,
+            "max_tokens": 64,
             "speculative_draft_length": draft_length
         });
 
@@ -319,7 +319,7 @@ fn main() {
     println!("Starting HaloSpec: Adaptive Speculative Scheduler Benchmark...");
 
     // Use a stable prompt for benchmarking (content doesn't matter much)
-    let prompt = "Explain speculative decoding in ONE sentence. Output ONLY the final sentence.";
+    let prompt = "In ONE sentence: explain speculative decoding. Output ONLY the final sentence. No reasoning, no analysis, no extra words.";
 
     let engine = LemonadeEngine::new("Qwen3-0.6B-GGUF");
 
