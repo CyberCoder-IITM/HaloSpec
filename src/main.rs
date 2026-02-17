@@ -1,12 +1,11 @@
 use reqwest::blocking::Client;
 use serde_json::json;
 use std::fs::OpenOptions;
-use std::io::Write;
-use std::thread::sleep;
+use std::io::Write;use std::thread::sleep;
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-const WARMUP_STEPS: usize =3; // per mode, not logged, not counted
+const WARMUP_STEPS: usize =5; // per mode, not logged, not counted
 
 
 #[derive(Clone)]
@@ -201,6 +200,7 @@ fn run_mode(
     }
     
     let mut last_latency: Option<u128> = None;
+    let mut latency_ema: Option<f64> = None;
     let mut draft_len: u32 = fixed.unwrap_or(4);
 
 
@@ -217,8 +217,8 @@ fn run_mode(
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("halospec_results.csv")
-        .expect("failed to open halospec_results.csv");
+        .open("results_phase0.csv")
+        .expect("failed to open results_phase0.csv");
 
     for step in 1..=steps {
 
@@ -247,7 +247,12 @@ fn run_mode(
             stats.successes += 1;
             stats.latencies_ms.push(latency_ms);
             stats.tokens_generated.push(tokens);
-            last_latency = Some(latency_ms);
+            let alpha = 0.4; // tune 0.3–0.5 if needed
+            latency_ema = Some(match latency_ema {
+                None => latency_ms as f64,
+                Some(prev) => alpha * latency_ms as f64 + (1.0 - alpha) * prev,
+            });
+            last_latency = Some(latency_ema.unwrap() as u128);
             draft_len = chosen;
         } else {
             println!("[FAIL] request failed after retries");
@@ -556,11 +561,11 @@ fn main() {
     
 
     // Write CSV header once (if file is new)
-    if std::fs::metadata("halospec_results.csv").is_err() {
+    if std::fs::metadata("results_phase0.csv").is_err() {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open("halospec_results.csv")
+            .open("results_phase0.csv")
             .unwrap();
         writeln!(file, "global_step,step,mode,draft_length,success,latency_ms,tokens").ok();
     }
@@ -579,5 +584,5 @@ fn main() {
 
     print_summary(&all_stats);
 
-    println!("\nDone. Results saved to halospec_results.csv");
+    println!("\nDone. Results saved to results_phase0.csv");
 }
