@@ -4,6 +4,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 const WARMUP_STEPS: usize =3; // per mode, not logged, not counted
 
 
@@ -129,8 +131,8 @@ impl LemonadeEngine {
 fn adaptive_draft_length(last_latency_ms: Option<u128>, current: u32, low: u128, high: u128) -> u32 {
     match last_latency_ms {
         None => current,
-        Some(lat) if lat < low => (current + 1).clamp(1, 8),
-        Some(lat) if lat > high => current.saturating_sub(1).clamp(1, 8),
+        Some(lat) if lat < low => (current + 1).min(8), // keep
+        Some(lat) if lat > high => current.saturating_sub(2).clamp(1, 8),
         Some(_) => {
             if current < 6 {
                 (current + 1).clamp(1, 8)
@@ -154,6 +156,8 @@ fn run_mode(
     println!("MODE: {}", mode);
     println!("==============================\n");
 
+    let load_on = std::env::var("HALOSPEC_LOAD").ok().as_deref() == Some("1");
+
     // Warmup phase: prime caches / stabilize Lemonade server (not logged, not counted)
     let mut warm_lat: Vec<u128> = Vec::with_capacity(WARMUP_STEPS);
 
@@ -170,6 +174,7 @@ fn run_mode(
     }
     println!("[Warmup done] Starting measured steps...\n");
 
+    let mut load_handle: Option<std::thread::JoinHandle<()>> = None;
     // Adaptive calibration: set thresholds based on warmup distribution (per run, per machine)
     let mut low_thr: u128 = 9_000;
     let mut high_thr: u128 = 22_000;
@@ -178,14 +183,23 @@ fn run_mode(
         let p50 = percentile_u128(&warm_lat, 50.0).unwrap_or(warm_lat[0]);
         let p95 = percentile_u128(&warm_lat, 95.0).unwrap_or(p50);
 
-        low_thr = ((p50 as f64) * 0.95) as u128;
+        low_thr = ((p50 as f64) * 0.85) as u128;
         high_thr = ((p95 as f64) * 1.05) as u128;
 
         println!(
             "[Adaptive Calib] warmup_p50={}ms warmup_p95={}ms => low={}ms high={}ms",
             p50, p95, low_thr, high_thr
         );
+
+        
+
+        // if mode == "adaptive" && load_on {
+        //     println!("[Load] Spawning CPU burner for 30s to simulate contention...");
+        //     load_handle = Some(spawn_cpu_burner(30));
+        // }
+        // We'll start load at a specific measured step (see per-step logic below)
     }
+    
     let mut last_latency: Option<u128> = None;
     let mut draft_len: u32 = fixed.unwrap_or(4);
 
@@ -207,6 +221,14 @@ fn run_mode(
         .expect("failed to open halospec_results.csv");
 
     for step in 1..=steps {
+
+
+
+        
+        if mode == "adaptive" && load_on && step == 6 && load_handle.is_none() {
+            println!("[Load] Spawning CPU burner for 30s starting at step 6...");
+            load_handle = Some(spawn_cpu_burner(30));
+        }
 
         *global_step += 1;
 
@@ -251,6 +273,10 @@ fn run_mode(
         // cooldown for local server stability
         sleep(Duration::from_secs(2));
 
+    }
+
+    if let Some(h) = load_handle {
+        let _ = h.join();
     }
 
     stats
@@ -492,12 +518,33 @@ fn print_summary(stats: &[ModeStats]) {
             }
         }
     }
-    
+
     if let Some((m, sc)) = best {
         println!("\nWinner (lowest SLO-aware score): {} at {:.1}", m, sc);
     }
 }
 
+fn spawn_cpu_burner(duration_secs: u64) -> std::thread::JoinHandle<()> {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    std::thread::spawn(move || {
+        let start = Instant::now();
+
+        while r.load(Ordering::Relaxed) {
+            // burn CPU with some deterministic arithmetic (kept by black_box)
+            let mut x: u64 = 0;
+            for i in 0..50_000 {
+                x = x.wrapping_add(i).wrapping_mul(1664525).wrapping_add(1013904223);
+            }
+            std::hint::black_box(x);
+
+            if start.elapsed().as_secs() >= duration_secs {
+                r.store(false, Ordering::Relaxed);
+            }
+        }
+    })
+}
 
 fn main() {
     println!("Starting HaloSpec: Adaptive Speculative Scheduler Benchmark...");
