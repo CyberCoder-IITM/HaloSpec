@@ -4,7 +4,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-const WARMUP_STEPS: usize = 2; // per mode, not logged, not counted
+const WARMUP_STEPS: usize =3; // per mode, not logged, not counted
 
 
 #[derive(Clone)]
@@ -126,14 +126,9 @@ impl LemonadeEngine {
     }
 }
 
-/// Adaptive controller: uses last latency to choose draft length
-fn adaptive_draft_length(last_latency_ms: Option<u128>, current: u32) -> u32 {
-    // You can tune these thresholds after seeing real data
-    let low = 9_000;//fast system
-    let high = 22_000; // overloaded / slow
-
+fn adaptive_draft_length(last_latency_ms: Option<u128>, current: u32, low: u128, high: u128) -> u32 {
     match last_latency_ms {
-        None => current, // first run, keep initial
+        None => current,
         Some(lat) if lat < low => (current + 1).clamp(1, 8),
         Some(lat) if lat > high => current.saturating_sub(1).clamp(1, 8),
         Some(_) => {
@@ -160,14 +155,37 @@ fn run_mode(
     println!("==============================\n");
 
     // Warmup phase: prime caches / stabilize Lemonade server (not logged, not counted)
+    let mut warm_lat: Vec<u128> = Vec::with_capacity(WARMUP_STEPS);
+
     for w in 1..=WARMUP_STEPS {
         let warm_draft = fixed.unwrap_or(4); // stable warmup choice
         println!("[Warmup {}] draft_length={}", w, warm_draft);
-        let _ = engine.generate_with_retry(prompt, warm_draft);
+
+        let (ok, latency_ms, _preview_tokens, _preview) = engine.generate_with_retry(prompt, warm_draft);
+        if ok {
+            warm_lat.push(latency_ms);
+        }
+
         sleep(Duration::from_secs(1));
     }
     println!("[Warmup done] Starting measured steps...\n");
 
+    // Adaptive calibration: set thresholds based on warmup distribution (per run, per machine)
+    let mut low_thr: u128 = 9_000;
+    let mut high_thr: u128 = 22_000;
+
+    if mode == "adaptive" && !warm_lat.is_empty() {
+        let p50 = percentile_u128(&warm_lat, 50.0).unwrap_or(warm_lat[0]);
+        let p95 = percentile_u128(&warm_lat, 95.0).unwrap_or(p50);
+
+        low_thr = ((p50 as f64) * 0.95) as u128;
+        high_thr = ((p95 as f64) * 1.05) as u128;
+
+        println!(
+            "[Adaptive Calib] warmup_p50={}ms warmup_p95={}ms => low={}ms high={}ms",
+            p50, p95, low_thr, high_thr
+        );
+    }
     let mut last_latency: Option<u128> = None;
     let mut draft_len: u32 = fixed.unwrap_or(4);
 
@@ -194,7 +212,7 @@ fn run_mode(
 
         let chosen = match fixed {
             Some(v) => v,
-            None => adaptive_draft_length(last_latency, draft_len),
+            None => adaptive_draft_length(last_latency, draft_len, low_thr, high_thr),
         };
 
         println!("[Step {}] chosen_draft_length={}", step, chosen);
@@ -309,6 +327,14 @@ impl ModeStats {
     Some(variance.sqrt())
     }
 
+
+    fn score(&self) -> Option<f64> {
+        let avg = self.avg()?;                 // ms
+        let p95 = self.p95()? as f64;          // ms
+        let sd  = self.stddev()?;              // ms
+        Some(avg + 0.5 * p95 + 0.2 * sd)
+    }
+
     fn draft_change_count(&self) -> usize {
     if self.draft_lengths.len() < 2 {
         return 0;
@@ -377,6 +403,13 @@ fn fmt_opt_stddev(v: Option<f64>) -> String {
     }
 }
 
+fn fmt_opt_score(v: Option<f64>) -> String {
+    match v {
+        Some(x) => format!("{:.1}", x),
+        None => "-".to_string(),
+    }
+}
+
 
 fn sanitize_reply(mut s: String) -> String {
     let t = s.trim();
@@ -408,13 +441,13 @@ fn print_summary(stats: &[ModeStats]) {
     println!("==============================\n");
 
     println!(
-        "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
-        "mode", "steps", "success", "fail", "avg", "median", "p95","min", "max", "stddev", "throughput"
+    "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14} {:>10}",
+    "mode", "steps", "success", "fail", "avg", "median", "p95", "min", "max", "stddev", "throughput", "score"
     );
 
     for s in stats {
         println!(
-            "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
+            "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14} {:>10}",
             s.mode,
             s.steps,
             s.success_rate() * 100.0,
@@ -426,6 +459,7 @@ fn print_summary(stats: &[ModeStats]) {
             fmt_opt_ms(s.max()),
             fmt_opt_stddev(s.stddev()),
             fmt_opt_tps(s.throughput()),
+            fmt_opt_score(s.score()),
         );
     }
 
@@ -447,20 +481,20 @@ fn print_summary(stats: &[ModeStats]) {
         }
     }
 
-    // Identify best avg (only among modes with avg available)
+    // Identify best score (lower is better): avg + 0.5*p95 + 0.2*stddev
     let mut best: Option<(&str, f64)> = None;
     for s in stats {
-        if let Some(a) = s.avg() {
+        if let Some(sc) = s.score() {
             match best {
-                None => best = Some((s.mode.as_str(), a)),
-                Some((_, best_a)) if a < best_a => best = Some((s.mode.as_str(), a)),
+                None => best = Some((s.mode.as_str(), sc)),
+                Some((_, best_sc)) if sc < best_sc => best = Some((s.mode.as_str(), sc)),
                 _ => {}
             }
         }
     }
-
-    if let Some((m, a)) = best {
-        println!("\nWinner (lowest avg latency): {} at {:.1} ms", m, a);
+    
+    if let Some((m, sc)) = best {
+        println!("\nWinner (lowest SLO-aware score): {} at {:.1}", m, sc);
     }
 }
 
