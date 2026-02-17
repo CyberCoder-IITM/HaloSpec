@@ -152,6 +152,7 @@ fn run_mode(
     steps: usize,
     prompt: &str,
     fixed: Option<u32>,
+    global_step: &mut u64,
 ) -> ModeStats {
     println!("\n==============================");
     println!("MODE: {}", mode);
@@ -177,6 +178,8 @@ fn run_mode(
         .expect("failed to open halospec_results.csv");
 
     for step in 1..=steps {
+
+        *global_step += 1;
 
         let chosen = match fixed {
             Some(v) => v,
@@ -204,7 +207,8 @@ fn run_mode(
         // CSV: timestamp-ish (step), mode, draft_length, success, latency_ms
         writeln!(
             file,
-            "{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{}",
+            *global_step,
             step,
             mode,
             chosen,
@@ -320,7 +324,7 @@ fn fmt_opt_avg(v: Option<f64>) -> String {
 
 fn fmt_opt_tps(v: Option<f64>) -> String {
     match v {
-        Some(x) => format!("{:.1} tok/s", x)
+        Some(x) => format!("{:.1} tok/s", x),
         None => "-".to_string(),
     }
 }
@@ -343,9 +347,6 @@ fn sanitize_reply(mut s: String) -> String {
         s = t.to_string();
     }
 
-    // 2) If model still starts with "Okay," style preamble, try to keep only last sentence.
-    //    This is a heuristic but works well for benchmarks.
-    //    We split on sentence terminators and keep the last non-empty sentence.
     let parts: Vec<&str> = s
         .split(|c| c == '.' || c == '!' || c == '?')
         .map(|x| x.trim())
@@ -366,13 +367,13 @@ fn print_summary(stats: &[ModeStats]) {
     println!("==============================\n");
 
     println!(
-        "{:<10} {:>6} {:>9} {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
+        "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
         "mode", "steps", "success", "fail", "avg", "median", "p95","min", "max", "stddev", "throughput"
     );
 
     for s in stats {
         println!(
-            "{:<10} {:>6} {:>9} {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
+            "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
             s.mode,
             s.steps,
             s.success_rate() * 100.0,
@@ -410,6 +411,8 @@ fn main() {
     // Use a stable prompt for benchmarking (content doesn't matter much)
     let prompt = "Explain speculative decoding in exactly ONE sentence. Start immediately with the definition (no preface).";
     let engine = LemonadeEngine::new("Qwen3-0.6B-GGUF");
+    let mut global_step: u64 = 0;
+    
 
     // Write CSV header once (if file is new)
     if std::fs::metadata("halospec_results.csv").is_err() {
@@ -418,15 +421,22 @@ fn main() {
             .append(true)
             .open("halospec_results.csv")
             .unwrap();
-        writeln!(file, "step,mode,draft_length,success,latency_ms,tokens").ok();
+        writeln!(file, "global_step,step,mode,draft_length,success,latency_ms,tokens").ok();
     }
 
-    // Baselines + adaptive
-    let s1 = run_mode(&engine, "fixed_1", 10, prompt, Some(1));
-    let s2 = run_mode(&engine, "fixed_8", 10, prompt, Some(8));
-    let s3 = run_mode(&engine, "adaptive", 15, prompt, None);
+    // Sweep fixed draft lengths 1..=8, then adaptive
+    let mut all_stats: Vec<ModeStats> = Vec::new();
 
-    print_summary(&[s1, s2, s3]);
+    for d in 1..=8u32 {
+        let mode = format!("fixed_{}", d);
+        let s = run_mode(&engine, &mode, 10, prompt, Some(d), &mut global_step);
+        all_stats.push(s);
+    }
+
+    let adaptive_stats = run_mode(&engine, "adaptive", 15, prompt, None, &mut global_step);
+    all_stats.push(adaptive_stats);
+
+    print_summary(&all_stats);
 
     println!("\nDone. Results saved to halospec_results.csv");
 }
