@@ -30,14 +30,17 @@ impl LemonadeEngine {
     }
 
     /// Send a request with retries and return (success, latency_ms, reply_preview)
-    fn generate_with_retry(&self, prompt: &str, draft_length: u32) -> (bool, u128, String) {
+   fn generate_with_retry(&self, prompt: &str, draft_length: u32) -> (bool, u128, u64, String){
         let payload = json!({
             "model": self.target_model,
             "messages": [
                 {"role": "user", "content": prompt}
             ],
             "stream": false,
-            "max_tokens": 64,
+            "max_tokens":64,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "stop":  ["</think>"],
             "speculative_draft_length": draft_length
         });
 
@@ -91,8 +94,14 @@ impl LemonadeEngine {
                             .to_string();
 
                         // keep output short for logs
-                        let preview = reply.chars().take(140).collect::<String>();
-                        return (true, latency, preview);
+                        let cleaned = sanitize_reply(reply.clone());
+                        let preview = cleaned.chars().take(140).collect::<String>();
+
+                        let tokens = res_json["usage"]["completion_tokens"]
+                            .as_u64()
+                            .unwrap_or(64); // fallback if usage missing
+
+                        return (true, latency, tokens, preview);
                     } else {
                         println!(
                             "[API Error] status={} | latency={}ms",
@@ -112,7 +121,7 @@ impl LemonadeEngine {
             backoff_ms *= 2;
         }
 
-        (false, 0, "FAILED".to_string())
+        (false, 0, 0, "FAILED".to_string())
     }
 }
 
@@ -158,6 +167,7 @@ fn run_mode(
         successes: 0,
         failures: 0,
         latencies_ms: Vec::with_capacity(steps),
+        tokens_generated: Vec::with_capacity(steps),
     };
 
     let mut file = OpenOptions::new()
@@ -175,12 +185,13 @@ fn run_mode(
 
         println!("[Step {}] chosen_draft_length={}", step, chosen);
 
-        let (ok, latency_ms, preview) = engine.generate_with_retry(prompt, chosen);
+        let (ok, latency_ms, tokens, preview) = engine.generate_with_retry(prompt, chosen);
 
         if ok {
-            println!("[OK] latency={}ms | reply_preview={}", latency_ms, preview);
+            println!("[OK] latency={}ms | tokens={} | reply_preview={}", latency_ms, tokens, preview);
             stats.successes += 1;
             stats.latencies_ms.push(latency_ms);
+            stats.tokens_generated.push(tokens);
             last_latency = Some(latency_ms);
             draft_len = chosen;
         } else {
@@ -193,12 +204,13 @@ fn run_mode(
         // CSV: timestamp-ish (step), mode, draft_length, success, latency_ms
         writeln!(
             file,
-            "{},{},{},{},{}",
+            "{},{},{},{},{},{}",
             step,
             mode,
             chosen,
             if ok { 1 } else { 0 },
-            latency_ms
+            latency_ms,
+            tokens
         )
         .ok();
 
@@ -217,6 +229,7 @@ struct ModeStats {
     successes: usize,
     failures: usize,
     latencies_ms: Vec<u128>, // only successful latencies
+    tokens_generated: Vec<u64>,
 }
 
 impl ModeStats {
@@ -246,6 +259,38 @@ impl ModeStats {
     fn p95(&self) -> Option<u128> {
         percentile_u128(&self.latencies_ms, 95.0)
     }
+    fn throughput(&self) -> Option<f64> {
+    if self.latencies_ms.is_empty() {
+        return None;
+    }
+
+    let total_tokens: u64 = self.tokens_generated.iter().sum();
+    let total_ms: u128 = self.latencies_ms.iter().sum();
+
+    if total_ms == 0 {
+        return None;
+    }
+
+    Some(total_tokens as f64 / (total_ms as f64 / 1000.0))
+    }
+
+
+    fn stddev(&self) -> Option<f64> {
+    let avg = self.avg()?; // returns None if no latencies
+
+    if self.latencies_ms.len() < 2 {
+        return Some(0.0); // not enough samples to show spread
+    }
+
+    let variance = self.latencies_ms.iter()
+        .map(|&x| {
+            let d = x as f64 - avg;
+            d * d
+        })
+        .sum::<f64>() / (self.latencies_ms.len() as f64);
+
+    Some(variance.sqrt())
+    }
 }
 
 fn percentile_u128(values: &Vec<u128>, pct: f64) -> Option<u128> {
@@ -273,19 +318,61 @@ fn fmt_opt_avg(v: Option<f64>) -> String {
     }
 }
 
+fn fmt_opt_tps(v: Option<f64>) -> String {
+    match v {
+        Some(x) => format!("{:.1} tok/s", x)
+        None => "-".to_string(),
+    }
+}
+
+fn fmt_opt_stddev(v: Option<f64>) -> String {
+    match v {
+        Some(x) => format!("{:.1} ms", x),
+        None => "-".to_string(),
+    }
+}
+
+
+fn sanitize_reply(mut s: String) -> String {
+    let t = s.trim();
+
+    // 1) Remove <think> blocks if present
+    if let Some(end) = t.find("</think>") {
+        s = t[end + "</think>".len()..].trim().to_string();
+    } else {
+        s = t.to_string();
+    }
+
+    // 2) If model still starts with "Okay," style preamble, try to keep only last sentence.
+    //    This is a heuristic but works well for benchmarks.
+    //    We split on sentence terminators and keep the last non-empty sentence.
+    let parts: Vec<&str> = s
+        .split(|c| c == '.' || c == '!' || c == '?')
+        .map(|x| x.trim())
+        .filter(|x| !x.is_empty())
+        .collect();
+
+    if parts.len() >= 2 {
+        // Re-add a period to look like a sentence.
+        format!("{}.", parts[parts.len() - 1])
+    } else {
+        s
+    }
+}
+
 fn print_summary(stats: &[ModeStats]) {
     println!("\n==============================");
     println!("HaloSpec Benchmark Summary");
     println!("==============================\n");
 
     println!(
-        "{:<10} {:>6} {:>9} {:>9} {:>12} {:>12} {:>12} {:>12} {:>10}",
-        "mode", "steps", "success", "fail", "avg", "median", "p95", "min", "max"
+        "{:<10} {:>6} {:>9} {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
+        "mode", "steps", "success", "fail", "avg", "median", "p95","min", "max", "stddev", "throughput"
     );
 
     for s in stats {
         println!(
-            "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>12} {:>10}",
+            "{:<10} {:>6} {:>9} {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14}",
             s.mode,
             s.steps,
             s.success_rate() * 100.0,
@@ -295,6 +382,8 @@ fn print_summary(stats: &[ModeStats]) {
             fmt_opt_ms(s.p95()),
             fmt_opt_ms(s.min()),
             fmt_opt_ms(s.max()),
+            fmt_opt_stddev(s.stddev()),
+            fmt_opt_tps(s.throughput()),
         );
     }
 
@@ -319,8 +408,7 @@ fn main() {
     println!("Starting HaloSpec: Adaptive Speculative Scheduler Benchmark...");
 
     // Use a stable prompt for benchmarking (content doesn't matter much)
-    let prompt = "In ONE sentence: explain speculative decoding. Output ONLY the final sentence. No reasoning, no analysis, no extra words.";
-
+    let prompt = "Explain speculative decoding in exactly ONE sentence. Start immediately with the definition (no preface).";
     let engine = LemonadeEngine::new("Qwen3-0.6B-GGUF");
 
     // Write CSV header once (if file is new)
@@ -330,7 +418,7 @@ fn main() {
             .append(true)
             .open("halospec_results.csv")
             .unwrap();
-        writeln!(file, "step,mode,draft_length,success,latency_ms").ok();
+        writeln!(file, "step,mode,draft_length,success,latency_ms,tokens").ok();
     }
 
     // Baselines + adaptive
