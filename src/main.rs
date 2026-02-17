@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+const WARMUP_STEPS: usize = 2; // per mode, not logged, not counted
 
 
 #[derive(Clone)]
@@ -158,6 +159,15 @@ fn run_mode(
     println!("MODE: {}", mode);
     println!("==============================\n");
 
+    // Warmup phase: prime caches / stabilize Lemonade server (not logged, not counted)
+    for w in 1..=WARMUP_STEPS {
+        let warm_draft = fixed.unwrap_or(4); // stable warmup choice
+        println!("[Warmup {}] draft_length={}", w, warm_draft);
+        let _ = engine.generate_with_retry(prompt, warm_draft);
+        sleep(Duration::from_secs(1));
+    }
+    println!("[Warmup done] Starting measured steps...\n");
+
     let mut last_latency: Option<u128> = None;
     let mut draft_len: u32 = fixed.unwrap_or(4);
 
@@ -169,6 +179,7 @@ fn run_mode(
         failures: 0,
         latencies_ms: Vec::with_capacity(steps),
         tokens_generated: Vec::with_capacity(steps),
+        draft_lengths: Vec::with_capacity(steps),
     };
 
     let mut file = OpenOptions::new()
@@ -187,6 +198,7 @@ fn run_mode(
         };
 
         println!("[Step {}] chosen_draft_length={}", step, chosen);
+        stats.draft_lengths.push(chosen);
 
         let (ok, latency_ms, tokens, preview) = engine.generate_with_retry(prompt, chosen);
 
@@ -234,6 +246,7 @@ struct ModeStats {
     failures: usize,
     latencies_ms: Vec<u128>, // only successful latencies
     tokens_generated: Vec<u64>,
+    draft_lengths: Vec<u32>,
 }
 
 impl ModeStats {
@@ -295,7 +308,35 @@ impl ModeStats {
 
     Some(variance.sqrt())
     }
+
+    fn draft_change_count(&self) -> usize {
+    if self.draft_lengths.len() < 2 {
+        return 0;
+    }
+    self.draft_lengths
+        .windows(2)
+        .filter(|w| w[0] != w[1])
+        .count()
+    }
+
+    // Returns the first step index (1-based) where draft length stays constant for `k` steps.
+    // Example: k=5 means "5 consecutive identical draft lengths".
+    fn convergence_step(&self, k: usize) -> Option<usize> {
+        if k == 0 || self.draft_lengths.len() < k {
+        return None;
+        }
+        for end in (k - 1)..self.draft_lengths.len() {
+        let start = end + 1 - k;
+        let slice = &self.draft_lengths[start..=end];
+        if slice.iter().all(|&x| x == slice[0]) {
+            return Some(end + 1); // 1-based "step"
+            }
+        }
+        None
+    }
+
 }
+
 
 fn percentile_u128(values: &Vec<u128>, pct: f64) -> Option<u128> {
     if values.is_empty() { return None; }
@@ -388,6 +429,24 @@ fn print_summary(stats: &[ModeStats]) {
         );
     }
 
+    // Adaptive controller behavior summary (convergence + oscillation)
+    for s in stats {
+        if s.mode == "adaptive" {
+            let changes = s.draft_change_count();
+            let conv = s.convergence_step(5);
+            match conv {
+                Some(step) => println!(
+                    "\n[Adaptive Behavior] draft_length changes={} | converged_at_step={} (k=5)",
+                    changes, step
+                ),
+                None => println!(
+                    "\n[Adaptive Behavior] draft_length changes={} | no convergence within run (k=5)",
+                    changes
+                ),
+            }
+        }
+    }
+
     // Identify best avg (only among modes with avg available)
     let mut best: Option<(&str, f64)> = None;
     for s in stats {
@@ -404,6 +463,7 @@ fn print_summary(stats: &[ModeStats]) {
         println!("\nWinner (lowest avg latency): {} at {:.1} ms", m, a);
     }
 }
+
 
 fn main() {
     println!("Starting HaloSpec: Adaptive Speculative Scheduler Benchmark...");
