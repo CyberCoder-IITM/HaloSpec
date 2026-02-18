@@ -130,3 +130,24 @@ adaptive 15 100.0% 0 3489.1 ms 3451 ms 3813 ms 3393 ms 3813 ms 114.9 ms 18.3 tok
 [Adaptive Behavior] draft_length changes=2 | converged_at_step=7 (k=5)
 
 Winner (lowest SLO-aware score): fixed_8 at 5113.8
+
+Phase 2 RUN:
+
+==============================
+HaloSpec Benchmark Summary
+==============================
+
+mode steps s% fail avg median p95 min max stddev throughput score
+fixed_1 10 100.0% 0 4156.9 ms 4007 ms 4945 ms 3853 ms 4945 ms 325.8 ms 15.4 tok/s 6694.6
+fixed_2 10 100.0% 0 4174.5 ms 4186 ms 4685 ms 3699 ms 4685 ms 295.5 ms 15.3 tok/s 6576.1
+fixed_3 10 100.0% 0 4084.6 ms 3923 ms 4746 ms 3700 ms 4746 ms 329.6 ms 15.7 tok/s 6523.5
+fixed_4 10 100.0% 0 3803.9 ms 3808 ms 4395 ms 3370 ms 4395 ms 318.3 ms 16.8 tok/s 6065.1
+fixed_5 10 100.0% 0 4206.8 ms 4229 ms 4601 ms 3704 ms 4601 ms 246.6 ms 15.2 tok/s 6556.6
+fixed_6 10 100.0% 0 3834.8 ms 3727 ms 4452 ms 3670 ms 4452 ms 217.4 ms 16.7 tok/s 6104.3
+fixed_7 10 100.0% 0 4908.9 ms 4213 ms 7724 ms 3814 ms 7724 ms 1212.0 ms 13.0 tok/s 9013.3
+fixed_8 10 100.0% 0 4433.5 ms 4118 ms 6155 ms 3710 ms 6155 ms 677.1 ms 14.4 tok/s 7646.4
+adaptive 15 100.0% 0 4436.0 ms 4418 ms 5740 ms 3555 ms 5740 ms 751.4 ms 14.4 tok/s 7456.3
+
+[Adaptive Behavior] draft_length changes=6 | converged_at_step=10 (k=5)
+
+Winner (lowest SLO-aware score): fixed_4 at 6065.1

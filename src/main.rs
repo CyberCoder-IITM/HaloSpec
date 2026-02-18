@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-const CSV_PATH: &str = "results_phase0.csv";
 const WARMUP_STEPS: usize = 5; // per mode, not logged, not counted
 
 #[derive(Clone)]

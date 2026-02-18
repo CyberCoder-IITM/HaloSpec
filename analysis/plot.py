@@ -37,6 +37,7 @@ def main():
     ad = ok[ok["mode"] == "adaptive"].sort_values("step")
     if not ad.empty:
         plt.figure()
+        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
         for phase_name, grp in ad.groupby("phase", sort=False):
             plt.plot(grp["step"], grp["latency_ms"], marker="o", linewidth=1, label=phase_name)
         plt.xlabel("step (adaptive)")
@@ -49,6 +50,7 @@ def main():
         # 2) Adaptive draft_length vs step (phase-colored)
         # ----------------------------
         plt.figure()
+        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
         for phase_name, grp in ad.groupby("phase", sort=False):
             plt.plot(grp["step"], grp["draft_length"], marker="o", linewidth=1, label=phase_name)
         plt.xlabel("step (adaptive)")
@@ -65,7 +67,8 @@ def main():
         labels = [p for p in phases if p in ad["phase"].unique()]
         if len(data) >= 1:
             plt.figure()
-            plt.boxplot(data, labels=labels, showfliers=False)
+            plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+            plt.boxplot(data, tick_labels=labels, showfliers=False)
             plt.xlabel("phase")
             plt.ylabel("latency (ms)")
             plt.title("Adaptive latency distribution by phase")
@@ -84,6 +87,7 @@ def main():
         p95_lat = g.quantile(0.95).sort_index()
 
         plt.figure()
+        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
         plt.bar(avg_lat.index, avg_lat.values)
         plt.xticks(rotation=45, ha="right")
         plt.xlabel("mode")
@@ -92,6 +96,7 @@ def main():
         savefig("fixed_avg_latency.png")
 
         plt.figure()
+        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
         plt.bar(p95_lat.index, p95_lat.values)
         plt.xticks(rotation=45, ha="right")
         plt.xlabel("mode")
@@ -123,6 +128,7 @@ def main():
     if scores:
         s = pd.Series(scores).sort_index()
         plt.figure()
+        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
         plt.bar(s.index, s.values)
         plt.xticks(rotation=45, ha="right")
         plt.xlabel("mode")
