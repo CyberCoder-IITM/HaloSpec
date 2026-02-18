@@ -137,6 +137,8 @@ These plots are generated from `results_phase0.csv` with `HALOSPEC_LOAD=1`, wher
 
 ## Research Perspective
 
+This project was built to explore how speculative decoding behaves under real runtime variability rather than idealized benchmark conditions.
+
 This benchmark frames speculative draft_length selection as a non-stationary control problem.  
 Rather than assuming a static optimal parameter, HaloSpec evaluates whether runtime-adaptive tuning can maintain stable latency under dynamic backend conditions and injected contention.
 
