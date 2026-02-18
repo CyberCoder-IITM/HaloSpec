@@ -5,6 +5,7 @@ use std::io::Write;use std::thread::sleep;
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+const CSV_PATH: &str = "results_phase0.csv";
 const WARMUP_STEPS: usize =5; // per mode, not logged, not counted
 
 
@@ -174,6 +175,8 @@ fn run_mode(
     println!("[Warmup done] Starting measured steps...\n");
 
     let mut load_handle: Option<std::thread::JoinHandle<()>> = None;
+    let load_active = Arc::new(AtomicBool::new(false));
+    let load_active_clone = load_active.clone();
     // Adaptive calibration: set thresholds based on warmup distribution (per run, per machine)
     let mut low_thr: u128 = 9_000;
     let mut high_thr: u128 = 22_000;
@@ -222,12 +225,19 @@ fn run_mode(
 
     for step in 1..=steps {
 
+        const LOAD_START_STEP: usize = 6;
 
-
+        if mode == "adaptive" && load_on && step == LOAD_START_STEP && load_handle.is_none() {
+            println!("[Load] Spawning CPU burner for 30s starting at step {}...", LOAD_START_STEP);
         
-        if mode == "adaptive" && load_on && step == 6 && load_handle.is_none() {
-            println!("[Load] Spawning CPU burner for 30s starting at step 6...");
-            load_handle = Some(spawn_cpu_burner(30));
+            load_active.store(true, Ordering::Relaxed);
+            let load_active_done = load_active.clone();
+        
+            load_handle = Some(std::thread::spawn(move || {
+                let h = spawn_cpu_burner(30);
+                let _ = h.join();
+                load_active_done.store(false, Ordering::Relaxed);
+            }));
         }
 
         *global_step += 1;
@@ -261,13 +271,27 @@ fn run_mode(
             draft_len = 1;
         }
 
+
+        let phase = if mode == "adaptive" && load_on {
+            if step < LOAD_START_STEP {
+                "steady"
+            } else if load_active_clone.load(Ordering::Relaxed) {
+                "load"
+            } else {
+                "recovery"
+            }
+        } else {
+            "steady"
+        };
+
         // CSV: timestamp-ish (step), mode, draft_length, success, latency_ms
         writeln!(
             file,
-            "{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{}",
             *global_step,
             step,
             mode,
+            phase,
             chosen,
             if ok { 1 } else { 0 },
             latency_ms,
@@ -567,7 +591,7 @@ fn main() {
             .append(true)
             .open("results_phase0.csv")
             .unwrap();
-        writeln!(file, "global_step,step,mode,draft_length,success,latency_ms,tokens").ok();
+        writeln!(file, "global_step,step,mode,phase,draft_length,success,latency_ms,tokens").ok();
     }
 
     // Sweep fixed draft lengths 1..=8, then adaptive
