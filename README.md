@@ -10,6 +10,13 @@ Measure latency/throughput + stability tradeoffs across:
 - adaptive controller (warmup-calibrated thresholds, SLO-aware scoring)
 - optional CPU load injection for contention experiments
 
+## Problem Framing
+
+Speculative decoding performance is highly sensitive to the chosen `draft_length`.  
+A static draft_length may perform well under one backend condition but degrade under contention or workload shifts.
+
+HaloSpec explores whether an adaptive draft controller, calibrated from warmup statistics and evaluated using an SLO-aware scoring function, can maintain stable performance under non-stationary runtime conditions.
+
 ## How it works (high level)
 
 Each mode:
@@ -18,6 +25,34 @@ Each mode:
 2. Measured steps (CSV logging)
 3. Summary stats + SLO-aware score
 4. Adaptive: tracks draft_length changes + convergence
+
+## Adaptive Control Strategy
+
+During warmup, latency percentiles (p50, p95) are measured and used to derive dynamic thresholds:
+
+- `low_thr  = 0.85 * p50`
+- `high_thr = 1.05 * p95`
+
+At runtime:
+
+- If latency < low_thr → increment draft_length
+- If latency > high_thr → decrement draft_length
+- Otherwise → maintain or gently increase
+
+Latency is smoothed via EMA to prevent oscillation under transient spikes.
+
+## Control Flow Overview
+
+```mermaid
+flowchart TD
+    A[Warmup] --> B[Compute p50 / p95]
+    B --> C[Set low/high thresholds]
+    C --> D[Measured Loop]
+    D --> E[Adaptive draft_length update]
+    E --> F[API Request]
+    F --> G[Log CSV + Metrics]
+    D --> H[Fixed modes (no update)]
+```
 
 ## Metrics
 
