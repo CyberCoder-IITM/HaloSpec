@@ -1,13 +1,13 @@
 use reqwest::blocking::Client;
 use serde_json::json;
 use std::fs::OpenOptions;
-use std::io::Write;use std::thread::sleep;
-use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 const CSV_PATH: &str = "results_phase0.csv";
-const WARMUP_STEPS: usize =5; // per mode, not logged, not counted
-
+const WARMUP_STEPS: usize = 5; // per mode, not logged, not counted
 
 #[derive(Clone)]
 struct LemonadeEngine {
@@ -33,7 +33,7 @@ impl LemonadeEngine {
     }
 
     /// Send a request with retries and return (success, latency_ms, reply_preview)
-   fn generate_with_retry(&self, prompt: &str, draft_length: u32) -> (bool, u128, u64, String){
+    fn generate_with_retry(&self, prompt: &str, draft_length: u32) -> (bool, u128, u64, String) {
         let payload = json!({
             "model": self.target_model,
             "messages": [
@@ -56,11 +56,7 @@ impl LemonadeEngine {
             );
 
             let start = Instant::now();
-            let res = self
-                .client
-                .post(&self.endpoint)
-                .json(&payload)
-                .send();
+            let res = self.client.post(&self.endpoint).json(&payload).send();
 
             match res {
                 Ok(response) => {
@@ -69,15 +65,12 @@ impl LemonadeEngine {
                     if response.status().is_success() {
                         let res_json: serde_json::Value = response.json().unwrap_or_default();
 
-                        let debug = std::env::var("HALOSPEC_DEBUG_JSON")
-
-                             .ok()                         
-                             .as_deref() == Some("1");
+                        let debug =
+                            std::env::var("HALOSPEC_DEBUG_JSON").ok().as_deref() == Some("1");
 
                         if debug {
-                          println!("\n[DEBUG] Full response JSON:\n{}\n", res_json);
+                            println!("\n[DEBUG] Full response JSON:\n{}\n", res_json);
                         }
-
 
                         let reply = res_json["choices"][0]["message"]["content"]
                             .as_str()
@@ -128,7 +121,12 @@ impl LemonadeEngine {
     }
 }
 
-fn adaptive_draft_length(last_latency_ms: Option<u128>, current: u32, low: u128, high: u128) -> u32 {
+fn adaptive_draft_length(
+    last_latency_ms: Option<u128>,
+    current: u32,
+    low: u128,
+    high: u128,
+) -> u32 {
     match last_latency_ms {
         None => current,
         Some(lat) if lat < low => (current + 1).min(8), // keep
@@ -165,7 +163,8 @@ fn run_mode(
         let warm_draft = fixed.unwrap_or(4); // stable warmup choice
         println!("[Warmup {}] draft_length={}", w, warm_draft);
 
-        let (ok, latency_ms, _preview_tokens, _preview) = engine.generate_with_retry(prompt, warm_draft);
+        let (ok, latency_ms, _preview_tokens, _preview) =
+            engine.generate_with_retry(prompt, warm_draft);
         if ok {
             warm_lat.push(latency_ms);
         }
@@ -193,19 +192,16 @@ fn run_mode(
             p50, p95, low_thr, high_thr
         );
 
-        
-
         // if mode == "adaptive" && load_on {
         //     println!("[Load] Spawning CPU burner for 30s to simulate contention...");
         //     load_handle = Some(spawn_cpu_burner(30));
         // }
         // We'll start load at a specific measured step (see per-step logic below)
     }
-    
+
     let mut last_latency: Option<u128> = None;
     let mut latency_ema: Option<f64> = None;
     let mut draft_len: u32 = fixed.unwrap_or(4);
-
 
     let mut stats = ModeStats {
         mode: mode.to_string(),
@@ -224,15 +220,17 @@ fn run_mode(
         .expect("failed to open results_phase0.csv");
 
     for step in 1..=steps {
-
         const LOAD_START_STEP: usize = 6;
 
         if mode == "adaptive" && load_on && step == LOAD_START_STEP && load_handle.is_none() {
-            println!("[Load] Spawning CPU burner for 30s starting at step {}...", LOAD_START_STEP);
-        
+            println!(
+                "[Load] Spawning CPU burner for 30s starting at step {}...",
+                LOAD_START_STEP
+            );
+
             load_active.store(true, Ordering::Relaxed);
             let load_active_done = load_active.clone();
-        
+
             load_handle = Some(std::thread::spawn(move || {
                 let h = spawn_cpu_burner(30);
                 let _ = h.join();
@@ -253,7 +251,10 @@ fn run_mode(
         let (ok, latency_ms, tokens, preview) = engine.generate_with_retry(prompt, chosen);
 
         if ok {
-            println!("[OK] latency={}ms | tokens={} | reply_preview={}", latency_ms, tokens, preview);
+            println!(
+                "[OK] latency={}ms | tokens={} | reply_preview={}",
+                latency_ms, tokens, preview
+            );
             stats.successes += 1;
             stats.latencies_ms.push(latency_ms);
             stats.tokens_generated.push(tokens);
@@ -270,7 +271,6 @@ fn run_mode(
             // If fail, fall back to conservative
             draft_len = 1;
         }
-
 
         let phase = if mode == "adaptive" && load_on {
             if step < LOAD_START_STEP {
@@ -301,7 +301,6 @@ fn run_mode(
 
         // cooldown for local server stability
         sleep(Duration::from_secs(2));
-
     }
 
     if let Some(h) = load_handle {
@@ -324,12 +323,16 @@ struct ModeStats {
 
 impl ModeStats {
     fn success_rate(&self) -> f64 {
-        if self.steps == 0 { return 0.0; }
+        if self.steps == 0 {
+            return 0.0;
+        }
         (self.successes as f64) / (self.steps as f64)
     }
 
     fn avg(&self) -> Option<f64> {
-        if self.latencies_ms.is_empty() { return None; }
+        if self.latencies_ms.is_empty() {
+            return None;
+        }
         let sum: u128 = self.latencies_ms.iter().sum();
         Some(sum as f64 / self.latencies_ms.len() as f64)
     }
@@ -350,77 +353,78 @@ impl ModeStats {
         percentile_u128(&self.latencies_ms, 95.0)
     }
     fn throughput(&self) -> Option<f64> {
-    if self.latencies_ms.is_empty() {
-        return None;
+        if self.latencies_ms.is_empty() {
+            return None;
+        }
+
+        let total_tokens: u64 = self.tokens_generated.iter().sum();
+        let total_ms: u128 = self.latencies_ms.iter().sum();
+
+        if total_ms == 0 {
+            return None;
+        }
+
+        Some(total_tokens as f64 / (total_ms as f64 / 1000.0))
     }
-
-    let total_tokens: u64 = self.tokens_generated.iter().sum();
-    let total_ms: u128 = self.latencies_ms.iter().sum();
-
-    if total_ms == 0 {
-        return None;
-    }
-
-    Some(total_tokens as f64 / (total_ms as f64 / 1000.0))
-    }
-
 
     fn stddev(&self) -> Option<f64> {
-    let avg = self.avg()?; // returns None if no latencies
+        let avg = self.avg()?; // returns None if no latencies
 
-    if self.latencies_ms.len() < 2 {
-        return Some(0.0); // not enough samples to show spread
+        if self.latencies_ms.len() < 2 {
+            return Some(0.0); // not enough samples to show spread
+        }
+
+        let variance = self
+            .latencies_ms
+            .iter()
+            .map(|&x| {
+                let d = x as f64 - avg;
+                d * d
+            })
+            .sum::<f64>()
+            / (self.latencies_ms.len() as f64);
+
+        Some(variance.sqrt())
     }
-
-    let variance = self.latencies_ms.iter()
-        .map(|&x| {
-            let d = x as f64 - avg;
-            d * d
-        })
-        .sum::<f64>() / (self.latencies_ms.len() as f64);
-
-    Some(variance.sqrt())
-    }
-
 
     fn score(&self) -> Option<f64> {
-        let avg = self.avg()?;                 // ms
-        let p95 = self.p95()? as f64;          // ms
-        let sd  = self.stddev()?;              // ms
+        let avg = self.avg()?; // ms
+        let p95 = self.p95()? as f64; // ms
+        let sd = self.stddev()?; // ms
         Some(avg + 0.5 * p95 + 0.2 * sd)
     }
 
     fn draft_change_count(&self) -> usize {
-    if self.draft_lengths.len() < 2 {
-        return 0;
-    }
-    self.draft_lengths
-        .windows(2)
-        .filter(|w| w[0] != w[1])
-        .count()
+        if self.draft_lengths.len() < 2 {
+            return 0;
+        }
+        self.draft_lengths
+            .windows(2)
+            .filter(|w| w[0] != w[1])
+            .count()
     }
 
     // Returns the first step index (1-based) where draft length stays constant for `k` steps.
     // Example: k=5 means "5 consecutive identical draft lengths".
     fn convergence_step(&self, k: usize) -> Option<usize> {
         if k == 0 || self.draft_lengths.len() < k {
-        return None;
+            return None;
         }
         for end in (k - 1)..self.draft_lengths.len() {
-        let start = end + 1 - k;
-        let slice = &self.draft_lengths[start..=end];
-        if slice.iter().all(|&x| x == slice[0]) {
-            return Some(end + 1); // 1-based "step"
+            let start = end + 1 - k;
+            let slice = &self.draft_lengths[start..=end];
+            if slice.iter().all(|&x| x == slice[0]) {
+                return Some(end + 1); // 1-based "step"
             }
         }
         None
     }
-
 }
 
-
 fn percentile_u128(values: &Vec<u128>, pct: f64) -> Option<u128> {
-    if values.is_empty() { return None; }
+    if values.is_empty() {
+        return None;
+    }
     let mut v = values.clone();
     v.sort_unstable();
     // nearest-rank method
@@ -465,7 +469,6 @@ fn fmt_opt_score(v: Option<f64>) -> String {
     }
 }
 
-
 fn sanitize_reply(mut s: String) -> String {
     let t = s.trim();
 
@@ -496,8 +499,19 @@ fn print_summary(stats: &[ModeStats]) {
     println!("==============================\n");
 
     println!(
-    "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14} {:>10}",
-    "mode", "steps", "success", "fail", "avg", "median", "p95", "min", "max", "stddev", "throughput", "score"
+        "{:<10} {:>6} {:>8.1}% {:>9} {:>12} {:>12} {:>12} {:>10} {:>10} {:>12} {:>14} {:>10}",
+        "mode",
+        "steps",
+        "success",
+        "fail",
+        "avg",
+        "median",
+        "p95",
+        "min",
+        "max",
+        "stddev",
+        "throughput",
+        "score"
     );
 
     for s in stats {
@@ -564,7 +578,10 @@ fn spawn_cpu_burner(duration_secs: u64) -> std::thread::JoinHandle<()> {
             // burn CPU with some deterministic arithmetic (kept by black_box)
             let mut x: u64 = 0;
             for i in 0..50_000 {
-                x = x.wrapping_add(i).wrapping_mul(1664525).wrapping_add(1013904223);
+                x = x
+                    .wrapping_add(i)
+                    .wrapping_mul(1664525)
+                    .wrapping_add(1013904223);
             }
             std::hint::black_box(x);
 
@@ -582,7 +599,6 @@ fn main() {
     let prompt = "Explain speculative decoding in exactly ONE sentence. Start immediately with the definition (no preface).";
     let engine = LemonadeEngine::new("Qwen3-0.6B-GGUF");
     let mut global_step: u64 = 0;
-    
 
     // Write CSV header once (if file is new)
     if std::fs::metadata("results_phase0.csv").is_err() {
@@ -591,7 +607,11 @@ fn main() {
             .append(true)
             .open("results_phase0.csv")
             .unwrap();
-        writeln!(file, "global_step,step,mode,phase,draft_length,success,latency_ms,tokens").ok();
+        writeln!(
+            file,
+            "global_step,step,mode,phase,draft_length,success,latency_ms,tokens"
+        )
+        .ok();
     }
 
     // Sweep fixed draft lengths 1..=8, then adaptive
