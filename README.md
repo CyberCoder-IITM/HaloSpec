@@ -23,6 +23,12 @@ HaloSpec explores whether an adaptive draft controller, calibrated from warmup s
 
 ![System Flow](docs/graphs/system_flow.png)
 
+## Demo
+
+Watch the adaptive controller respond to runtime load injection:
+
+[▶ HaloSpec Adaptive Load Demo](docs/demo/halospec_adaptive_load_demo.mp4)
+
 ## How it works (high level)
 
 Each mode:
