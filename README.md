@@ -2,6 +2,8 @@
 
 Rust benchmark harness for speculative decoding **draft_length** strategies against the Lemonade inference engine.
 
+Target backend: **Lemonade**, a local inference server exposing a chat/completions-style HTTP API.
+
 ## Goal
 
 Measure latency/throughput + stability tradeoffs across:
@@ -16,6 +18,10 @@ Speculative decoding performance is highly sensitive to the chosen `draft_length
 A static draft_length may perform well under one backend condition but degrade under contention or workload shifts.
 
 HaloSpec explores whether an adaptive draft controller, calibrated from warmup statistics and evaluated using an SLO-aware scoring function, can maintain stable performance under non-stationary runtime conditions.
+
+## System Architecture
+
+![System Flow](docs/graphs/system_flow.png)
 
 ## How it works (high level)
 
@@ -41,18 +47,9 @@ At runtime:
 
 Latency is smoothed via EMA to prevent oscillation under transient spikes.
 
-## Control Flow Overview
+## Adaptive Controller Logic
 
-```mermaid
-flowchart TD
-    A[Warmup] --> B[Compute p50 / p95]
-    B --> C[Set low/high thresholds]
-    C --> D[Measured Loop]
-    D --> E[Adaptive draft_length update]
-    E --> F[API Request]
-    F --> G[Log CSV + Metrics]
-    D --> H[Fixed modes (no update)]
-```
+![Adaptive Logic](docs/graphs/adaptive_logic.png)
 
 ## Metrics
 
@@ -61,18 +58,26 @@ flowchart TD
 - success rate
 - adaptive: draft change count, convergence_step(k)
 
+## SLO-Aware Scoring Model
+
+![SLO Score](docs/graphs/slo_score.png)
+
 ## Load injection (adaptive only)
 
-Enable with:
+Enable:
 
 - `HALOSPEC_LOAD=1`
-  Behavior:
-- does **not** run during warmup
-- starts at measured step 6
-- duration ~30s
-  Purpose: test controller stability under contention.
+
+Behavior:
+
+- **Not** during warmup
+- Starts at measured step **6**
+- Duration: ~**30s**
+- Goal: test controller stability under contention
 
 ## Running
+
+### macOS / Linux (Bash)
 
 ```bash
 # Fixed sweep + adaptive
@@ -84,6 +89,23 @@ HALOSPEC_LOAD=1 cargo run
 # Optional verbose JSON
 HALOSPEC_DEBUG_JSON=1 cargo run
 ```
+
+### Windows (PowerShell)
+
+```bash
+# Fixed sweep + adaptive
+cargo run
+
+# With load injection
+$env:HALOSPEC_LOAD="1"; cargo run
+
+# Optional verbose JSON
+$env:HALOSPEC_DEBUG_JSON="1"; cargo run
+```
+
+## Load Injection Timeline
+
+![Load Timeline](docs/graphs/load_timeline.png)
 
 ## Experimental Results (Load Injection)
 
@@ -112,6 +134,13 @@ These plots are generated from `results_phase0.csv` with `HALOSPEC_LOAD=1`, wher
 ### SLO-aware score by mode
 
 ![SLO-aware score](docs/graphs/score_by_mode.png)
+
+## Research Perspective
+
+This benchmark frames speculative draft_length selection as a non-stationary control problem.  
+Rather than assuming a static optimal parameter, HaloSpec evaluates whether runtime-adaptive tuning can maintain stable latency under dynamic backend conditions and injected contention.
+
+The objective is not simply to outperform fixed configurations, but to analyze controller behavior, convergence properties, and stability under perturbation.
 
 ## Key Takeaways
 
