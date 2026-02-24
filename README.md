@@ -155,3 +155,11 @@ The objective is not simply to outperform fixed configurations, but to analyze c
 - Load injection produces a measurable latency elevation during the `load` phase followed by stabilization in `recovery`.
 - The adaptive controller remains stable (bounded draft_length changes) and converges after the perturbation window.
 - Fixed draft_length modes can outperform adaptive in some runs; the project frames this as a non-stationary tuning problem under runtime variability.
+
+## Community & Contribution
+
+HaloSpec is an open-source experiment. I welcome contributions from the AMD developer community, specifically in:
+
+- **Telemetry accuracy:** Implementing real Linux `perf` event monitoring for actual UMA bandwidth tracking.
+- **Model Support:** Testing performance gains across different GGUF model architectures (Llama, Mistral, Qwen).
+- **Control Theory:** Refining the `alpha` tuning parameter for smoother draft length transitions.
